@@ -1,0 +1,84 @@
+/* Custom CSS für Tab-Navigation */
+.nav-tabs {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    margin-bottom: 20px;
+}
+
+.nav-tabs .nav-link {
+    color: rgba(255, 255, 255, 0.7);
+    border: none;
+    padding: 12px 20px;
+    font-weight: 500;
+    transition: all 0.3s ease;
+    position: relative;
+}
+
+.nav-tabs .nav-link:hover {
+    color: rgba(255, 255, 255, 0.9);
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.nav-tabs .nav-link.active {
+    color: #fff;
+    background-color: transparent;
+    border: none;
+}
+
+.nav-tabs .nav-link.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background-color: #3b82f6; /* Blau als Akzentfarbe */
+    transform: scaleX(1);
+    transition: transform 0.3s ease;
+}
+
+.nav-tabs .nav-link:not(.active)::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    background-color: #3b82f6;
+    transform: scaleX(0);
+    transition: transform 0.3s ease;
+}
+
+.nav-tabs .nav-link:hover::after {
+    transform: scaleX(0.5);
+}
+
+/* Tab-Inhalte Animation */
+.tab-content {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Mobile-Responsiveness für Tabs */
+@media (max-width: 768px) {
+    .nav-tabs {
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    .nav-tabs .nav-link {
+        white-space: nowrap;
+        padding: 10px 15px;
+    }
+}
