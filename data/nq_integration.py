@@ -1,334 +1,228 @@
-"""
-NQ-Integration für das Trading Dashboard
-"""
-
 import os
 import sys
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-import logging
-import requests
 import json
-from io import StringIO
+import pandas as pd
+from datetime import datetime, timedelta
+import time
+from pathlib import Path
+import yfinance as yf
+import requests
 
-# Logger konfigurieren
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("nq_integration.log"),
-        logging.StreamHandler()
-    ]
-)
-
-logger = logging.getLogger("nq_integration")
 
 class NQDataFetcher:
     """
-    Klasse zum Abrufen von NQ-Futures-Daten
+    Spezialisierte Klasse zum Abrufen von NASDAQ 100 Futures (NQ) Daten
     """
-    
-    def __init__(self):
+
+    def __init__(self, cache_dir=None):
         """
-        Initialisiert den NQ-Daten-Fetcher
+        Initialisiert den NQDataFetcher
+
+        Args:
+            cache_dir (str, optional): Verzeichnis für den Daten-Cache.
+                                      Standardmäßig wird ein 'cache' Verzeichnis im data-Ordner verwendet.
         """
-        self.cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
+        if cache_dir is None:
+            # Standardverzeichnis für den Cache
+            self.cache_dir = Path(os.path.dirname(os.path.abspath(__file__))) / 'cache'
+        else:
+            self.cache_dir = Path(cache_dir)
+
+        # Stelle sicher, dass das Cache-Verzeichnis existiert
         os.makedirs(self.cache_dir, exist_ok=True)
-    
-    def get_nq_futures_data(self, interval="1d", range_val="1y"):
+
+    def get_nq_futures_data(self, interval='1d', range_val='1y', use_cache=True, force_refresh=False):
         """
-        Ruft NQ-Futures-Daten ab
-        
+        Ruft NQ Futures Daten für ein bestimmtes Zeitintervall ab
+
         Args:
-            interval (str): Zeitintervall ("1m", "2m", "5m", "15m", "30m", "60m", "1d", "1wk", "1mo")
-            range_val (str): Zeitraum ("1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max")
-        
+            interval (str): Zeitintervall ('1m', '5m', '15m', '30m', '60m', '1h', '1d', '1wk', '1mo')
+            range_val (str): Zeitraum ('1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', 'max')
+            use_cache (bool): Ob der Cache verwendet werden soll
+            force_refresh (bool): Ob die Daten unabhängig vom Cache neu abgerufen werden sollen
+
         Returns:
-            pd.DataFrame: DataFrame mit OHLCV-Daten
+            pandas.DataFrame: DataFrame mit den NQ Futures Daten
         """
+        # Standardmäßig verwenden wir das generische NQ Futures Symbol
+        symbol = "NQ=F"
+
+        # Alternativ könnten wir einen spezifischen Kontrakt verwenden
+        # Aktuelle verfügbare Kontrakte: NQH24, NQM24, NQU24, NQZ24
+        # symbol = "NQH24.CME"  # März 2024 Kontrakt
+
+        cache_file = self.cache_dir / f"NQ_Futures_{interval}_{range_val}.csv"
+
+        # Prüfe, ob Cache verwendet werden soll und Datei existiert
+        if use_cache and cache_file.exists() and not force_refresh:
+            # Prüfe, ob Cache aktuell ist (für tägliche Daten nicht älter als 1 Tag)
+            cache_age = datetime.now() - datetime.fromtimestamp(cache_file.stat().st_mtime)
+            if interval in ['1d', '1wk', '1mo'] and cache_age.days < 1:
+                print(f"Verwende gecachte NQ Futures Daten")
+                return pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            elif interval.endswith('m') and cache_age.seconds < 3600:  # Für Minutendaten: 1 Stunde Cache
+                print(f"Verwende gecachte NQ Futures Daten")
+                return pd.read_csv(cache_file, index_col=0, parse_dates=True)
+
+        # Versuche zuerst, Daten über yfinance abzurufen
         try:
-            # Prüfe, ob Daten im Cache vorhanden sind
-            cache_file = os.path.join(self.cache_dir, f"NQ_Futures_{interval}_{range_val}.csv")
-            
-            # Prüfe, ob Cache-Datei existiert und nicht älter als 24 Stunden ist
-            if os.path.exists(cache_file):
-                file_age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(cache_file))
-                if file_age.total_seconds() < 24 * 60 * 60:  # 24 Stunden in Sekunden
-                    logger.info(f"Lade NQ-Daten aus Cache: {cache_file}")
-                    return pd.read_csv(cache_file, index_col=0, parse_dates=True)
-            
-            # Verwende Yahoo Finance API, um NQ-Futures-Daten abzurufen
-            logger.info(f"Rufe NQ-Futures-Daten ab mit Intervall {interval} und Zeitraum {range_val}")
-            
-            # Verwende die YahooFinance API
-            try:
-                # Importiere die API-Client-Bibliothek
-                sys.path.append('/opt/.manus/.sandbox-runtime')
-                from data_api import ApiClient
-                client = ApiClient()
-                
-                # Rufe Daten über die API ab
-                response = client.call_api('YahooFinance/get_stock_chart', query={
-                    'symbol': 'NQ=F',
-                    'interval': interval,
-                    'range': range_val,
-                    'includePrePost': False,
-                    'includeAdjustedClose': True
-                })
-                
-                # Verarbeite die Antwort
-                if response and 'chart' in response and 'result' in response['chart'] and response['chart']['result']:
-                    result = response['chart']['result'][0]
-                    
-                    # Extrahiere Zeitstempel und Indikatoren
-                    timestamps = result['timestamp']
-                    quote = result['indicators']['quote'][0]
-                    
-                    # Erstelle DataFrame
-                    df = pd.DataFrame({
-                        'open': quote['open'],
-                        'high': quote['high'],
-                        'low': quote['low'],
-                        'close': quote['close'],
-                        'volume': quote['volume']
-                    })
-                    
-                    # Füge Zeitstempel als Index hinzu
-                    df.index = pd.to_datetime([datetime.fromtimestamp(ts) for ts in timestamps])
-                    df.index.name = 'date'
-                    
-                    # Speichere Daten im Cache
+            print(f"Rufe NQ Futures Daten über yfinance ab...")
+
+            # Stelle sicher, dass Intervall korrekt formatiert ist (yfinance verwendet '1h' statt '60m')
+            if interval == '60m':
+                yf_interval = '1h'
+            else:
+                yf_interval = interval
+
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=range_val, interval=yf_interval)
+
+            if df.empty:
+                print(f"Keine Daten für {symbol} mit period={range_val}, interval={yf_interval}.")
+                # Verwende die direkte Download-Methode als Fallback
+                df = yf.download(symbol, period=range_val, interval=yf_interval)
+
+            if not df.empty:
+                # Standardisiere Spaltennamen
+                df.columns = [col if col != 'Stock Splits' else 'Splits' for col in df.columns]
+
+                # Speichere Daten im Cache
+                if use_cache:
                     df.to_csv(cache_file)
-                    
-                    logger.info(f"NQ-Futures-Daten erfolgreich abgerufen: {len(df)} Datenpunkte")
-                    return df
-                else:
-                    logger.error("Fehler beim Abrufen der NQ-Futures-Daten: Ungültiges Antwortformat")
-            except Exception as api_error:
-                logger.error(f"Fehler beim Abrufen der NQ-Futures-Daten über API: {str(api_error)}")
-            
-            # Fallback: Generiere synthetische Daten
-            logger.warning("Verwende synthetische NQ-Futures-Daten als Fallback")
-            return self._generate_synthetic_nq_data(interval, range_val)
-        
+
+                print(f"Erfolgreich NQ Futures Daten abgerufen, {len(df)} Datenpunkte")
+                return df
+
         except Exception as e:
-            logger.error(f"Fehler beim Abrufen der NQ-Futures-Daten: {str(e)}")
-            return pd.DataFrame()  # Leerer DataFrame bei Fehler
-    
-    def _generate_synthetic_nq_data(self, interval="1d", range_val="1y"):
-        """
-        Generiert synthetische NQ-Futures-Daten
-        
-        Args:
-            interval (str): Zeitintervall
-            range_val (str): Zeitraum
-        
-        Returns:
-            pd.DataFrame: DataFrame mit synthetischen OHLCV-Daten
-        """
+            print(f"Fehler beim Abrufen der NQ Futures Daten über yfinance: {e}")
+
+        # Wenn yfinance fehlschlägt, versuche die Twelve Data API (benötigt einen API-Schlüssel)
         try:
-            # Bestimme Start- und Enddatum basierend auf range_val
-            end_date = datetime.now()
-            
-            if range_val == "1d":
-                start_date = end_date - timedelta(days=1)
-            elif range_val == "5d":
-                start_date = end_date - timedelta(days=5)
-            elif range_val == "1mo":
-                start_date = end_date - timedelta(days=30)
-            elif range_val == "3mo":
-                start_date = end_date - timedelta(days=90)
-            elif range_val == "6mo":
-                start_date = end_date - timedelta(days=180)
-            elif range_val == "1y":
-                start_date = end_date - timedelta(days=365)
-            elif range_val == "2y":
-                start_date = end_date - timedelta(days=365*2)
-            elif range_val == "5y":
-                start_date = end_date - timedelta(days=365*5)
-            elif range_val == "10y":
-                start_date = end_date - timedelta(days=365*10)
-            elif range_val == "ytd":
-                start_date = datetime(end_date.year, 1, 1)
-            elif range_val == "max":
-                start_date = end_date - timedelta(days=365*20)
+            # Diese Beispielimplementierung nutzt die Twelve Data API
+            # Registrieren Sie sich für einen kostenlosen API-Schlüssel: https://twelvedata.com/
+            print("Versuche Twelve Data API als Fallback...")
+
+            # Setzen Sie Ihren API-Schlüssel hier ein oder in einer .env-Datei
+            api_key = os.getenv("TWELVE_DATA_API_KEY", "")
+
+            if not api_key:
+                print(
+                    "Kein API-Schlüssel für Twelve Data gefunden. Bitte setzen Sie die Umgebungsvariable TWELVE_DATA_API_KEY.")
+                return pd.DataFrame()
+
+            # Konvertiere Intervall zum Twelve Data-Format
+            interval_map = {
+                '1m': '1min', '5m': '5min', '15m': '15min', '30m': '30min',
+                '60m': '1h', '1h': '1h', '1d': '1day', '1wk': '1week', '1mo': '1month'
+            }
+            td_interval = interval_map.get(interval, '1day')
+
+            # Bestimme die Anzahl der Datenpunkte basierend auf dem Zeitraum
+            # Free API begrenzt auf 5000 Datenpunkte
+            output_size = 5000
+
+            # Konstruiere die API-URL
+            url = f"https://api.twelvedata.com/time_series"
+            params = {
+                "symbol": "NQ:GLOIU",  # NASDAQ 100 Futures Symbol bei Twelve Data
+                "interval": td_interval,
+                "outputsize": output_size,
+                "apikey": api_key,
+                "format": "JSON"
+            }
+
+            response = requests.get(url, params=params)
+            data = response.json()
+
+            if "values" in data:
+                # Konvertiere JSON zu Pandas DataFrame
+                values = data["values"]
+                df = pd.DataFrame(values)
+
+                # Konvertiere Spalten
+                df["datetime"] = pd.to_datetime(df["datetime"])
+                for col in ["open", "high", "low", "close", "volume"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col])
+
+                # Setze datetime als Index und benenne Spalten um
+                df.set_index("datetime", inplace=True)
+                df.rename(columns={
+                    "open": "Open",
+                    "high": "High",
+                    "low": "Low",
+                    "close": "Close",
+                    "volume": "Volume"
+                }, inplace=True)
+
+                # Sortiere Daten chronologisch
+                df.sort_index(inplace=True)
+
+                # Speichere Daten im Cache
+                if use_cache:
+                    df.to_csv(cache_file)
+
+                print(f"Erfolgreich NQ Futures Daten von Twelve Data abgerufen, {len(df)} Datenpunkte")
+
+                print("\n----- NQ DATA DEBUG -----")
+                print("Datentyp:", type(df))
+                print("Spalten:", df.columns.tolist())
+                print("Index-Typ:", type(df.index))
+                print("Erste Zeilen:")
+                print(df.head(3))
+                print("Datentypen der Spalten:")
+                print(df.dtypes)
+                print("-------------------------\n")
+
+                # Nach dem Abrufen der NQ-Daten, vor der Rückgabe
+                # Standardisiere Spaltennamen (erster Buchstabe groß)
+                column_mapping = {
+                    'open': 'Open',
+                    'high': 'High',
+                    'low': 'Low',
+                    'close': 'Close',
+                    'volume': 'Volume'
+                }
+
+                # Benenne Spalten um, falls nötig
+                for old_col, new_col in column_mapping.items():
+                    if old_col in df.columns:
+                        df.rename(columns={old_col: new_col}, inplace=True)
+
+                    # Nach dem Abrufen der NQ-Daten, vor der Rückgabe
+                    # Stelle sicher, dass der Index ein DatetimeIndex ist
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    df.index = pd.to_datetime(df.index)
+
+                # Stelle sicher, dass die Zeitzone korrekt ist (falls nötig)
+                if df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+                
+                # Stelle sicher, dass keine tzinfo-Attribute vorhanden sind
+                df.index = pd.DatetimeIndex([dt.replace(tzinfo=None) if hasattr(dt, 'tzinfo') else dt for dt in df.index])
+
+
+                return df
             else:
-                start_date = end_date - timedelta(days=365)
-            
-            # Bestimme Frequenz basierend auf interval
-            if interval == "1m":
-                freq = "1min"
-                # Für 1-Minuten-Daten nur Handelszeiten (9:30-16:00 ET)
-                trading_hours = []
-                current_date = start_date
-                while current_date <= end_date:
-                    if current_date.weekday() < 5:  # Montag bis Freitag
-                        for hour in range(9, 16):
-                            minute_start = 30 if hour == 9 else 0
-                            minute_end = 60
-                            for minute in range(minute_start, minute_end):
-                                trading_time = current_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                                if trading_time <= end_date:
-                                    trading_hours.append(trading_time)
-                    current_date += timedelta(days=1)
-                date_range = pd.DatetimeIndex(trading_hours)
-            elif interval == "2m":
-                freq = "2min"
-                # Für 2-Minuten-Daten
-                trading_hours = []
-                current_date = start_date
-                while current_date <= end_date:
-                    if current_date.weekday() < 5:  # Montag bis Freitag
-                        for hour in range(9, 16):
-                            minute_start = 30 if hour == 9 else 0
-                            minute_end = 60
-                            for minute in range(minute_start, minute_end, 2):
-                                trading_time = current_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                                if trading_time <= end_date:
-                                    trading_hours.append(trading_time)
-                    current_date += timedelta(days=1)
-                date_range = pd.DatetimeIndex(trading_hours)
-            elif interval == "5m":
-                freq = "5min"
-                # Für 5-Minuten-Daten
-                trading_hours = []
-                current_date = start_date
-                while current_date <= end_date:
-                    if current_date.weekday() < 5:  # Montag bis Freitag
-                        for hour in range(9, 16):
-                            minute_start = 30 if hour == 9 else 0
-                            minute_end = 60
-                            for minute in range(minute_start, minute_end, 5):
-                                trading_time = current_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                                if trading_time <= end_date:
-                                    trading_hours.append(trading_time)
-                    current_date += timedelta(days=1)
-                date_range = pd.DatetimeIndex(trading_hours)
-            elif interval == "15m":
-                freq = "15min"
-                # Für 15-Minuten-Daten
-                trading_hours = []
-                current_date = start_date
-                while current_date <= end_date:
-                    if current_date.weekday() < 5:  # Montag bis Freitag
-                        for hour in range(9, 16):
-                            minute_start = 30 if hour == 9 else 0
-                            minute_end = 60
-                            for minute in range(minute_start, minute_end, 15):
-                                trading_time = current_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                                if trading_time <= end_date:
-                                    trading_hours.append(trading_time)
-                    current_date += timedelta(days=1)
-                date_range = pd.DatetimeIndex(trading_hours)
-            elif interval == "30m":
-                freq = "30min"
-                # Für 30-Minuten-Daten
-                trading_hours = []
-                current_date = start_date
-                while current_date <= end_date:
-                    if current_date.weekday() < 5:  # Montag bis Freitag
-                        for hour in range(9, 16):
-                            minute_start = 30 if hour == 9 else 0
-                            minute_end = 60
-                            for minute in range(minute_start, minute_end, 30):
-                                trading_time = current_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                                if trading_time <= end_date:
-                                    trading_hours.append(trading_time)
-                    current_date += timedelta(days=1)
-                date_range = pd.DatetimeIndex(trading_hours)
-            elif interval == "60m" or interval == "1h":
-                freq = "60min"
-                # Für 1-Stunden-Daten
-                trading_hours = []
-                current_date = start_date
-                while current_date <= end_date:
-                    if current_date.weekday() < 5:  # Montag bis Freitag
-                        for hour in range(9, 16):
-                            if hour == 9:
-                                trading_time = current_date.replace(hour=hour, minute=30, second=0, microsecond=0)
-                            else:
-                                trading_time = current_date.replace(hour=hour, minute=0, second=0, microsecond=0)
-                            if trading_time <= end_date:
-                                trading_hours.append(trading_time)
-                    current_date += timedelta(days=1)
-                date_range = pd.DatetimeIndex(trading_hours)
-            elif interval == "1d":
-                freq = "D"
-                # Für Tagesdaten nur Handelstage (Montag bis Freitag)
-                trading_days = []
-                current_date = start_date
-                while current_date <= end_date:
-                    if current_date.weekday() < 5:  # Montag bis Freitag
-                        trading_days.append(current_date)
-                    current_date += timedelta(days=1)
-                date_range = pd.DatetimeIndex(trading_days)
-            elif interval == "1wk" or interval == "1w":
-                freq = "W-FRI"
-                # Für Wochendaten
-                date_range = pd.date_range(start=start_date, end=end_date, freq=freq)
-            elif interval == "1mo":
-                freq = "MS"
-                # Für Monatsdaten
-                date_range = pd.date_range(start=start_date, end=end_date, freq=freq)
-            else:
-                freq = "D"
-                # Fallback auf Tagesdaten
-                date_range = pd.date_range(start=start_date, end=end_date, freq=freq)
-            
-            # Generiere synthetische OHLCV-Daten für NQ-Futures
-            np.random.seed(42)  # Für reproduzierbare Ergebnisse
-            
-            # Startpreis für NQ-Futures
-            base_price = 17500.0
-            
-            # Generiere OHLC-Daten mit realistischeren Preisbewegungen
-            volatility = 0.03  # Mittlere Volatilität für NQ Futures
-            
-            price_data = []
-            current_price = base_price
-            trend = np.random.choice([-1, 1]) * 0.0001  # Zufälliger Trend
-            
-            for i in range(len(date_range)):
-                # Ändere den Trend gelegentlich
-                if i % 20 == 0:
-                    trend = np.random.normal(0, 0.0003)
-                
-                # Zufällige Preisbewegung mit Trend
-                daily_return = np.random.normal(trend, volatility)
-                current_price *= (1 + daily_return)
-                
-                # Generiere OHLC-Daten
-                high_low_range = current_price * volatility * 2
-                open_price = current_price * (1 + np.random.normal(0, 0.003))
-                close_price = current_price
-                high_price = max(open_price, close_price) + abs(np.random.normal(0, high_low_range/2))
-                low_price = min(open_price, close_price) - abs(np.random.normal(0, high_low_range/2))
-                
-                # Volumen mit höheren Werten bei größeren Preisbewegungen
-                volume_base = np.random.randint(1000000, 10000000)
-                volume_factor = 1 + abs(daily_return) * 10
-                volume = int(volume_base * volume_factor)
-                
-                price_data.append({
-                    'date': date_range[i],
-                    'open': open_price,
-                    'high': high_price,
-                    'low': low_price,
-                    'close': close_price,
-                    'volume': volume
-                })
-            
-            df = pd.DataFrame(price_data)
-            df.set_index('date', inplace=True)
-            
-            # Speichere die synthetischen Daten im Cache
-            cache_file = os.path.join(self.cache_dir, f"NQ_Futures_{interval}_{range_val}.csv")
-            df.to_csv(cache_file)
-            
-            logger.info(f"Synthetische NQ-Futures-Daten generiert: {len(df)} Datenpunkte")
-            return df
-        
+                print(f"Fehler bei Twelve Data-Anfrage: {data.get('message', 'Unbekannter Fehler')}")
+
         except Exception as e:
-            logger.error(f"Fehler beim Generieren synthetischer NQ-Futures-Daten: {str(e)}")
-            return pd.DataFrame()  # Leerer DataFrame bei Fehler
+            print(f"Fehler beim Abrufen der Twelve Data API: {e}")
+
+        # Wenn alle Versuche fehlschlagen, gib einen leeren DataFrame zurück
+        print("Alle Versuche, NQ Futures Daten abzurufen, sind fehlgeschlagen.")
+        return pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'Adj Close'])
+
+
+# Beispiel zur Verwendung
+if __name__ == "__main__":
+    fetcher = NQDataFetcher()
+    # Test für verschiedene Zeitrahmen
+    intervals = ['1h', '1d']
+    for interval in intervals:
+        print(f"\nTestdaten für Interval {interval}:")
+        data = fetcher.get_nq_futures_data(interval=interval, range_val='1mo')
+        if not data.empty:
+            print(data.head())
+            print(f"Datenpunkte: {len(data)}")
+            print(f"Zeitraum: {data.index.min()} bis {data.index.max()}")
