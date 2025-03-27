@@ -1,0 +1,26 @@
+{
+  "popular_symbols": [
+    {"symbol": "AAPL", "name": "Apple Inc."},
+    {"symbol": "MSFT", "name": "Microsoft Corporation"},
+    {"symbol": "AMZN", "name": "Amazon.com Inc."},
+    {"symbol": "GOOGL", "name": "Alphabet Inc. (Google) Class A"},
+    {"symbol": "META", "name": "Meta Platforms Inc."},
+    {"symbol": "TSLA", "name": "Tesla Inc."},
+    {"symbol": "NVDA", "name": "NVIDIA Corporation"},
+    {"symbol": "NFLX", "name": "Netflix Inc."},
+    {"symbol": "PYPL", "name": "PayPal Holdings Inc."},
+    {"symbol": "INTC", "name": "Intel Corporation"},
+    {"symbol": "CSCO", "name": "Cisco Systems Inc."},
+    {"symbol": "CMCSA", "name": "Comcast Corporation"},
+    {"symbol": "PEP", "name": "PepsiCo Inc."},
+    {"symbol": "ADBE", "name": "Adobe Inc."},
+    {"symbol": "AVGO", "name": "Broadcom Inc."}
+  ],
+  "indices": [
+    {"symbol": "QQQ", "name": "Invesco QQQ Trust (Nasdaq-100 Index)"},
+    {"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust"},
+    {"symbol": "DIA", "name": "SPDR Dow Jones Industrial Average ETF"},
+    {"symbol": "IWM", "name": "iShares Russell 2000 ETF"},
+    {"symbol": "XLK", "name": "Technology Select Sector SPDR Fund"}
+  ]
+}
